@@ -1,43 +1,71 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_dsp/juce_dsp.h>
+#include "RingBuffer.h"
+#include "LufsMeterDSP.h"
 
-#if (MSVC)
-#include "ipps.h"
-#endif
+namespace TrueLevel
+{
 
-class PluginProcessor : public juce::AudioProcessor
+class TrueLevelAudioProcessor : public juce::AudioProcessor,
+                                public juce::AudioProcessorValueTreeState::Listener
 {
 public:
-    PluginProcessor();
-    ~PluginProcessor() override;
+    TrueLevelAudioProcessor();
+    ~TrueLevelAudioProcessor() override;
 
-    void prepareToPlay (double sampleRate, int samplesPerBlock) override;
+    void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
-
-    bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
-
-    void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
+    void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
-    bool hasEditor() const override;
+    bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override;
+    const juce::String getName() const override { return "TrueLevel"; }
+    bool acceptsMidi() const override { return false; }
+    bool producesMidi() const override { return false; }
+    bool isMidiEffect() const override { return false; }
+    double getTailLengthSeconds() const override { return 0.0; }
 
-    bool acceptsMidi() const override;
-    bool producesMidi() const override;
-    bool isMidiEffect() const override;
-    double getTailLengthSeconds() const override;
+    int getNumPrograms() override { return 1; }
+    int getCurrentProgram() override { return 0; }
+    void setCurrentProgram(int) override {}
+    const juce::String getProgramName(int) override { return {}; }
+    void changeProgramName(int, const juce::String&) override {}
 
-    int getNumPrograms() override;
-    int getCurrentProgram() override;
-    void setCurrentProgram (int index) override;
-    const juce::String getProgramName (int index) override;
-    void changeProgramName (int index, const juce::String& newName) override;
+    void getStateInformation(juce::MemoryBlock& destData) override;
+    void setStateInformation(const void* data, int sizeInBytes) override;
 
-    void getStateInformation (juce::MemoryBlock& destData) override;
-    void setStateInformation (const void* data, int sizeInBytes) override;
+    void parameterChanged(const juce::String& parameterID, float newValue) override;
+
+    // Thread-safe accessors for PluginEditor
+    LufsMeterDSP& getMeterDSP() noexcept { return meterDSP; }
+    LockFreeRingBuffer<GoniometerSample, 4096>& getGoniometerQueue() noexcept { return goniometerQueue; }
+    juce::AudioProcessorValueTreeState& getAPVTS() noexcept { return apvts; }
+
+    float getTargetLufs() const noexcept;
+    float getCurrentGainMatchOffsetDb() const noexcept { return currentGainMatchOffsetDb.load(std::memory_order_relaxed); }
+
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
 private:
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
+    juce::AudioProcessorValueTreeState apvts;
+    LufsMeterDSP meterDSP;
+    LockFreeRingBuffer<GoniometerSample, 4096> goniometerQueue;
+
+    // Scratch channel read pointers (pre-allocated)
+    std::vector<const float*> channelPointers;
+
+    // Vectorized decimation counter for goniometer
+    int goniometerDecimator { 0 };
+
+    // Linear smoothed gain match multiplier
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> smoothedGainMatch;
+    std::atomic<float> currentGainMatchOffsetDb { 0.0f };
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TrueLevelAudioProcessor)
 };
+
+} // namespace TrueLevel
